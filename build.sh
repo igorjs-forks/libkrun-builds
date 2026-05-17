@@ -138,15 +138,36 @@ mkdir -p "${WORK}/libkrunfw"
 tar -xzf "${WORK}/${LIBKRUNFW_ASSET}" -C "${WORK}/libkrunfw" --strip-components=1 \
   || { echo "error: failed to extract libkrunfw tarball" >&2; exit 3; }
 
-(
-  cd "${WORK}/libkrunfw"
-  echo "==> Building libkrunfw via its bundled Makefile"
-  make -j"$(getconf _NPROCESSORS_ONLN || echo 4)" \
-    || { echo "error: libkrunfw make failed" >&2; exit 3; }
-  echo "==> Installing libkrunfw into ${PREFIX}"
-  make PREFIX="${PREFIX}" install \
-    || { echo "error: libkrunfw make install failed" >&2; exit 3; }
-)
+# Upstream publishes two tarball shapes under different asset names:
+#   - macOS `libkrunfw-prebuilt-<arch>.tgz`: source-ish tarball with a
+#     Makefile that compiles kernel.c into a dylib. We run make.
+#   - Linux `libkrunfw-<arch>.tgz`: fully prebuilt .so files. We just
+#     install them.
+# Detect by Makefile presence rather than asset name so this is robust
+# to upstream renaming.
+if [[ -f "${WORK}/libkrunfw/Makefile" ]]; then
+  (
+    cd "${WORK}/libkrunfw"
+    echo "==> Building libkrunfw via its bundled Makefile"
+    make -j"$(getconf _NPROCESSORS_ONLN || echo 4)" \
+      || { echo "error: libkrunfw make failed" >&2; exit 3; }
+    echo "==> Installing libkrunfw into ${PREFIX}"
+    make PREFIX="${PREFIX}" install \
+      || { echo "error: libkrunfw make install failed" >&2; exit 3; }
+  )
+else
+  echo "==> Installing prebuilt libkrunfw binaries into ${PREFIX}"
+  mkdir -p "${PREFIX}/lib64"
+  shopt -s nullglob
+  files=( "${WORK}/libkrunfw"/libkrunfw.* )
+  shopt -u nullglob
+  if (( ${#files[@]} == 0 )); then
+    echo "error: tarball has no Makefile and no libkrunfw.* binaries" >&2
+    ls -la "${WORK}/libkrunfw/" >&2
+    exit 3
+  fi
+  cp -P "${files[@]}" "${PREFIX}/lib64/"
+fi
 
 # ---------------------------------------------------------------------------
 # 2) libkrun: clone the source tag and build, pointing pkg-config at
