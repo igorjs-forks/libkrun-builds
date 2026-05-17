@@ -2,17 +2,28 @@
 #
 # Build relocatable libkrun + libkrunfw artefacts for the host platform.
 #
-# Output: ./dist/libkrun-${VERSION}-${TARGET}.tar.gz
+# Output: ./dist/libkrun-${LIBKRUN_VERSION}-${TARGET}.tar.gz
 #
 # The tarball layout:
-#   lib/libkrun.${ext}              (with @rpath / $ORIGIN install name)
-#   lib/libkrunfw.${ext}            (same)
+#   lib/libkrun.${ext}              with @rpath / $ORIGIN install name
+#   lib/libkrunfw.${ext}            with @rpath / $ORIGIN install name
 #   include/libkrun.h
-#   lib/pkgconfig/libkrun.pc        (synthesised, points at the tarball
-#                                    layout so consumers can use pkg-config)
+#   lib/pkgconfig/libkrun.pc        synthesised, prefix placeholder
+#                                   rewritten by the consumer
 #
-# This script is called by .github/workflows/vendor-libkrun.yml on a matrix
-# of build hosts. It can also be run locally for debugging.
+# Versioning:
+#   libkrun and libkrunfw use *independent* version schemes. The
+#   pairing is authoritative via slp/krun's Homebrew formulas. We pin
+#   both in this repo:
+#     version.txt             libkrun release tag (e.g. 1.18.0)
+#     libkrunfw-version.txt   libkrunfw release tag (e.g. 5.3.0)
+#
+# Build approach:
+#   - libkrunfw: download upstream's prebuilt arch tarball + run its
+#     bundled `make` + `make install`. Much faster than building the
+#     custom Linux kernel from source.
+#   - libkrun: clone the source tag and `make`, with PKG_CONFIG_PATH
+#     pointing at the staged libkrunfw.
 #
 # Usage:
 #   ./build.sh                    Build for the host's native triple.
@@ -22,37 +33,49 @@
 #   - bash, make, gcc/clang
 #   - cargo (Rust 1.75+)
 #   - patchelf (Linux) or install_name_tool (macOS, ships with Xcode CLT)
-#   - git, curl, tar, gzip, sha256sum / shasum
+#   - curl, tar, gzip, sha256sum / shasum
+#   - pkg-config
 #
 # Exit codes:
-#   0   Success, ./dist/libkrun-${VERSION}-${TARGET}.tar.gz exists.
+#   0   Success, ./dist/libkrun-${LIBKRUN_VERSION}-${TARGET}.tar.gz exists.
 #   1   Unknown / unsupported target triple.
-#   2   Dependency missing (one of the tools above).
-#   3   Upstream clone or build failed.
-#   4   Relocation failed (install_name_tool or patchelf returned non-zero).
+#   2   Dependency missing.
+#   3   Upstream download or build failed.
+#   4   Relocation failed.
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Resolve VERSION + TARGET
+# Resolve versions + TARGET
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="$(tr -d '[:space:]' < "${SCRIPT_DIR}/version.txt")"
+LIBKRUN_VERSION="$(tr -d '[:space:]' < "${SCRIPT_DIR}/version.txt")"
+LIBKRUNFW_VERSION="$(tr -d '[:space:]' < "${SCRIPT_DIR}/libkrunfw-version.txt")"
 
 if [[ -z "${TARGET:-}" ]]; then
-  # Auto-detect from rustc. Avoids hard-coding platform detection logic;
-  # rustc already knows every supported triple by name.
   TARGET="$(rustc -vV | awk '/^host:/ {print $2}')"
 fi
 
+# Map host target → libkrunfw upstream arch + dylib extension.
+# The libkrunfw kernel always runs inside a Linux microVM regardless
+# of the host OS, so macOS arm64 uses the same kernel image as Linux
+# arm64. Only the dylib loader format differs (Mach-O vs ELF), which
+# the libkrunfw build handles via its host-aware Makefile.
 case "${TARGET}" in
   aarch64-apple-darwin)
     DYLIB_EXT="dylib"
+    LIBKRUNFW_ASSET="libkrunfw-prebuilt-aarch64.tgz"
     BACKEND="hvf"
     ;;
-  x86_64-unknown-linux-gnu | aarch64-unknown-linux-gnu)
+  x86_64-unknown-linux-gnu)
     DYLIB_EXT="so"
+    LIBKRUNFW_ASSET="libkrunfw-x86_64.tgz"
+    BACKEND="kvm"
+    ;;
+  aarch64-unknown-linux-gnu)
+    DYLIB_EXT="so"
+    LIBKRUNFW_ASSET="libkrunfw-aarch64.tgz"
     BACKEND="kvm"
     ;;
   *)
@@ -62,7 +85,8 @@ case "${TARGET}" in
     ;;
 esac
 
-echo "==> Building libkrun ${VERSION} for ${TARGET} (backend: ${BACKEND})"
+echo "==> Building libkrun ${LIBKRUN_VERSION} (+ libkrunfw ${LIBKRUNFW_VERSION}) for ${TARGET}"
+echo "==> Backend: ${BACKEND}, libkrunfw asset: ${LIBKRUNFW_ASSET}"
 
 # ---------------------------------------------------------------------------
 # Sanity-check tooling
@@ -75,11 +99,11 @@ need() {
 need bash
 need make
 need cargo
-need git
 need curl
 need tar
 need gzip
-need sha256sum 2>/dev/null || need shasum
+need pkg-config
+command -v sha256sum > /dev/null 2>&1 || command -v shasum > /dev/null 2>&1 || { echo "error: missing sha256sum or shasum" >&2; exit 2; }
 
 if [[ "${TARGET}" == *darwin* ]]; then
   need install_name_tool
@@ -88,95 +112,134 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Work in a scratch directory under ./build/
+# Scratch directories
 # ---------------------------------------------------------------------------
 
 WORK="${SCRIPT_DIR}/build/${TARGET}"
 DIST="${SCRIPT_DIR}/dist"
 STAGE="${WORK}/stage"
+PREFIX="${WORK}/prefix"
 
-rm -rf "${WORK}" "${STAGE}"
-mkdir -p "${WORK}" "${STAGE}/lib/pkgconfig" "${STAGE}/include" "${DIST}"
+rm -rf "${WORK}"
+mkdir -p "${WORK}" "${STAGE}/lib/pkgconfig" "${STAGE}/include" "${PREFIX}" "${DIST}"
 
 # ---------------------------------------------------------------------------
-# Build libkrunfw first, libkrun links against it.
+# 1) libkrunfw: download prebuilt tarball, run its bundled make + install.
 # ---------------------------------------------------------------------------
 
-LIBKRUNFW_VERSION="${LIBKRUNFW_VERSION:-${VERSION}}"
-echo "==> Cloning libkrunfw ${LIBKRUNFW_VERSION}"
-git clone --depth 1 --branch "v${LIBKRUNFW_VERSION}" \
-  https://github.com/containers/libkrunfw.git "${WORK}/libkrunfw" \
-  || { echo "error: failed to clone libkrunfw" >&2; exit 3; }
+LIBKRUNFW_URL="https://github.com/containers/libkrunfw/releases/download/v${LIBKRUNFW_VERSION}/${LIBKRUNFW_ASSET}"
+echo "==> Downloading libkrunfw v${LIBKRUNFW_VERSION} (${LIBKRUNFW_ASSET})"
+curl --fail --silent --show-error --location \
+  --output "${WORK}/${LIBKRUNFW_ASSET}" \
+  "${LIBKRUNFW_URL}" \
+  || { echo "error: failed to download libkrunfw from ${LIBKRUNFW_URL}" >&2; exit 3; }
+
+mkdir -p "${WORK}/libkrunfw"
+tar -xzf "${WORK}/${LIBKRUNFW_ASSET}" -C "${WORK}/libkrunfw" --strip-components=1 \
+  || { echo "error: failed to extract libkrunfw tarball" >&2; exit 3; }
 
 (
   cd "${WORK}/libkrunfw"
-  echo "==> Building libkrunfw"
-  make -j"$(getconf _NPROCESSORS_ONLN)" || { echo "error: libkrunfw build failed" >&2; exit 3; }
+  echo "==> Building libkrunfw via its bundled Makefile"
+  make -j"$(getconf _NPROCESSORS_ONLN || echo 4)" \
+    || { echo "error: libkrunfw make failed" >&2; exit 3; }
+  echo "==> Installing libkrunfw into ${PREFIX}"
+  make PREFIX="${PREFIX}" install \
+    || { echo "error: libkrunfw make install failed" >&2; exit 3; }
 )
 
-# Stage libkrunfw.
-cp "${WORK}/libkrunfw/libkrunfw.${DYLIB_EXT}"* "${STAGE}/lib/" 2>/dev/null || true
-
 # ---------------------------------------------------------------------------
-# Build libkrun, linking against the staged libkrunfw.
+# 2) libkrun: clone the source tag and build, pointing pkg-config at
+#    the staged libkrunfw so the linker finds it.
 # ---------------------------------------------------------------------------
 
-echo "==> Cloning libkrun ${VERSION}"
-git clone --depth 1 --branch "v${VERSION}" \
-  https://github.com/containers/libkrun.git "${WORK}/libkrun" \
-  || { echo "error: failed to clone libkrun" >&2; exit 3; }
+echo "==> Cloning libkrun v${LIBKRUN_VERSION}"
+curl --fail --silent --show-error --location \
+  --output "${WORK}/libkrun.tar.gz" \
+  "https://github.com/containers/libkrun/archive/refs/tags/v${LIBKRUN_VERSION}.tar.gz" \
+  || { echo "error: failed to download libkrun source tarball" >&2; exit 3; }
+mkdir -p "${WORK}/libkrun"
+tar -xzf "${WORK}/libkrun.tar.gz" -C "${WORK}/libkrun" --strip-components=1 \
+  || { echo "error: failed to extract libkrun source" >&2; exit 3; }
 
 (
   cd "${WORK}/libkrun"
   echo "==> Building libkrun"
-  # libkrun's Makefile picks up LIBRARY_PATH / PKG_CONFIG_PATH from the env.
-  export LIBRARY_PATH="${STAGE}/lib:${LIBRARY_PATH:-}"
-  make -j"$(getconf _NPROCESSORS_ONLN)" || { echo "error: libkrun build failed" >&2; exit 3; }
+  export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PREFIX}/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"
+  export LIBRARY_PATH="${PREFIX}/lib:${PREFIX}/lib64:${LIBRARY_PATH:-}"
+  export LD_LIBRARY_PATH="${PREFIX}/lib:${PREFIX}/lib64:${LD_LIBRARY_PATH:-}"
+  # Tell libkrun's Makefile to install under our PREFIX.
+  make -j"$(getconf _NPROCESSORS_ONLN || echo 4)" \
+    || { echo "error: libkrun make failed" >&2; exit 3; }
+  make PREFIX="${PREFIX}" install \
+    || { echo "error: libkrun make install failed" >&2; exit 3; }
 )
 
-# Stage libkrun + headers.
-cp "${WORK}/libkrun/target/release/libkrun.${DYLIB_EXT}"* "${STAGE}/lib/" 2>/dev/null || true
-cp "${WORK}/libkrun/include/libkrun.h" "${STAGE}/include/"
+# ---------------------------------------------------------------------------
+# 3) Stage the artefacts we want in the final tarball.
+# ---------------------------------------------------------------------------
+
+# libkrunfw + libkrun .dylib/.so files. Both might be installed under
+# lib/ or lib64/ depending on the upstream Makefile; copy whatever
+# exists. Use `find` instead of glob to handle SO versioning suffixes
+# (e.g. libkrun.so.1.18.0) and symlinks.
+echo "==> Staging dylibs"
+for libdir in "${PREFIX}/lib" "${PREFIX}/lib64"; do
+  [[ -d "$libdir" ]] || continue
+  find "$libdir" -maxdepth 1 \( -name "libkrun.${DYLIB_EXT}*" -o -name "libkrunfw.${DYLIB_EXT}*" \) \
+    -exec cp -P {} "${STAGE}/lib/" \;
+done
+
+# Headers (only libkrun.h is what consumers need, libkrunfw is loaded
+# at runtime, not directly compiled against).
+cp "${PREFIX}/include/libkrun.h" "${STAGE}/include/" \
+  || { echo "error: libkrun.h not found in ${PREFIX}/include" >&2; exit 3; }
+
+# Verify we got the unversioned dylib symlinks (consumers link via -lkrun
+# which resolves to libkrun.dylib / libkrun.so).
+for lib in libkrun libkrunfw; do
+  if ! ls "${STAGE}/lib/${lib}.${DYLIB_EXT}" > /dev/null 2>&1; then
+    echo "error: missing ${STAGE}/lib/${lib}.${DYLIB_EXT} after staging" >&2
+    ls -la "${STAGE}/lib/" >&2
+    exit 3
+  fi
+done
 
 # ---------------------------------------------------------------------------
-# Relocate install names so the dylibs are portable.
-#
-# Without this step, the dylibs reference their build-time paths (e.g.
-# /tmp/build/libkrun.dylib), and they only work when extracted to the
-# exact same location on the consumer machine. After rewriting, they
-# reference @rpath/libkrun.dylib (macOS) or $ORIGIN/libkrun.so (Linux),
-# which lets the loader find them relative to the executable.
+# 4) Relocate install names so the dylibs are portable.
 # ---------------------------------------------------------------------------
 
 echo "==> Rewriting install names for relocatability"
 if [[ "${TARGET}" == *darwin* ]]; then
-  # Resolve the realpath to the actual versioned dylib if the unversioned
-  # name is a symlink (which it usually is on macOS Homebrew builds).
   for lib in libkrun libkrunfw; do
-    file="${STAGE}/lib/${lib}.${DYLIB_EXT}"
-    [[ -L "$file" ]] && file="$(readlink "$file")" && file="${STAGE}/lib/${file}"
-    install_name_tool -id "@rpath/${lib}.${DYLIB_EXT}" "$file" || exit 4
+    # Resolve symlinks to the actual versioned dylib.
+    target_file="${STAGE}/lib/${lib}.${DYLIB_EXT}"
+    if [[ -L "$target_file" ]]; then
+      target_file="${STAGE}/lib/$(readlink "$target_file")"
+    fi
+    install_name_tool -id "@rpath/${lib}.${DYLIB_EXT}" "$target_file" || exit 4
   done
-  # libkrun loads libkrunfw, rewrite its LC_LOAD_DYLIB entry to @rpath too.
-  install_name_tool -change \
-    "/usr/local/lib/libkrunfw.${DYLIB_EXT}" \
-    "@rpath/libkrunfw.${DYLIB_EXT}" \
-    "${STAGE}/lib/libkrun.${DYLIB_EXT}" || true
+  # libkrun loads libkrunfw at runtime, rewrite its LC_LOAD_DYLIB
+  # entry to @rpath too. The original path varies; cover common ones.
+  for libkrun_file in "${STAGE}/lib/libkrun.${DYLIB_EXT}" "${STAGE}/lib/libkrun.${DYLIB_EXT}."*; do
+    [[ -f "$libkrun_file" && ! -L "$libkrun_file" ]] || continue
+    otool -L "$libkrun_file" | awk 'NR>1 && /libkrunfw/ {print $1}' | while read -r ref; do
+      install_name_tool -change "$ref" "@rpath/libkrunfw.${DYLIB_EXT}" "$libkrun_file" || true
+    done
+  done
 else
   # Linux: set RUNPATH = $ORIGIN so the loader looks next to the .so.
   for lib in libkrun libkrunfw; do
-    file="${STAGE}/lib/${lib}.${DYLIB_EXT}"
-    patchelf --set-rpath '$ORIGIN' "$file" || exit 4
+    target_file="${STAGE}/lib/${lib}.${DYLIB_EXT}"
+    if [[ -L "$target_file" ]]; then
+      target_file="${STAGE}/lib/$(readlink "$target_file")"
+    fi
+    patchelf --set-rpath '$ORIGIN' "$target_file" || exit 4
   done
 fi
 
 # ---------------------------------------------------------------------------
-# Synthesise libkrun.pc so consumers using pkg-config (e.g. krun-sys's
-# build.rs) find the staged include + lib paths.
-#
-# ${prefix} is intentionally a placeholder; ward-core/build.rs rewrites
-# it to the actual OUT_DIR path at consumer build time. pkg-config
-# respects $PKG_CONFIG_SYSROOT_DIR for this kind of relocation.
+# 5) Synthesise libkrun.pc, placeholder prefix rewritten by consumer.
 # ---------------------------------------------------------------------------
 
 cat > "${STAGE}/lib/pkgconfig/libkrun.pc" <<EOF
@@ -187,20 +250,19 @@ includedir=\${prefix}/include
 
 Name: libkrun
 Description: Dynamic library for spawning microVMs
-Version: ${VERSION}
+Version: ${LIBKRUN_VERSION}
 Libs: -L\${libdir} -lkrun
 Cflags: -I\${includedir}
 EOF
 
 # ---------------------------------------------------------------------------
-# Tar + checksum the result.
+# 6) Tar + checksum the result.
 # ---------------------------------------------------------------------------
 
-TARBALL="libkrun-${VERSION}-${TARGET}.tar.gz"
+TARBALL="libkrun-${LIBKRUN_VERSION}-${TARGET}.tar.gz"
 echo "==> Producing ${TARBALL}"
 tar -C "${STAGE}" -czf "${DIST}/${TARBALL}" .
 
-# Cross-platform SHA-256. macOS ships `shasum` (Perl), Linux ships `sha256sum`.
 if command -v sha256sum > /dev/null 2>&1; then
   (cd "${DIST}" && sha256sum "${TARBALL}")
 else
