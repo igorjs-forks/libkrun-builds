@@ -231,12 +231,26 @@ done
 # ---------------------------------------------------------------------------
 
 echo "==> Rewriting install names for relocatability"
+echo "==> Stage layout before relocation:"
+ls -la "${STAGE}/lib/" || true
 if [[ "${TARGET}" == *darwin* ]]; then
   for lib in libkrun libkrunfw; do
-    # Resolve symlinks to the actual versioned dylib.
-    target_file="${STAGE}/lib/${lib}.${DYLIB_EXT}"
-    if [[ -L "$target_file" ]]; then
-      target_file="${STAGE}/lib/$(readlink "$target_file")"
+    # Fully resolve the symlink chain to the actual versioned dylib.
+    # Upstream libkrun lays out e.g.
+    #   libkrun.dylib -> libkrun.1.dylib -> libkrun.1.18.0.dylib
+    # `readlink` only follows one level; `realpath` chases the whole
+    # chain. macOS's built-in realpath (BSD) is available on macOS 12+.
+    sym="${STAGE}/lib/${lib}.${DYLIB_EXT}"
+    if [[ ! -e "$sym" ]]; then
+      echo "error: ${sym} not found after staging" >&2
+      ls -la "${STAGE}/lib/" >&2
+      exit 4
+    fi
+    target_file="$(realpath "$sym")"
+    if [[ ! -f "$target_file" ]]; then
+      echo "error: realpath of ${sym} -> ${target_file} is not a regular file" >&2
+      ls -la "${STAGE}/lib/" >&2
+      exit 4
     fi
     install_name_tool -id "@rpath/${lib}.${DYLIB_EXT}" "$target_file" || exit 4
   done
