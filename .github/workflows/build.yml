@@ -1,16 +1,7 @@
 # Build relocatable libkrun + libkrunfw artefacts on a matrix of hosts and
 # publish them to a GitHub Release tagged `libkrun-v<version>`.
 #
-# These bottles are consumed by the ward release packaging pipeline, which
-# bundles them alongside the `wardd` and `ward` binaries into per-platform
-# end-user artefacts (`.pkg`, `.deb`, `install.sh` tarballs). End users
-# download one self-contained file and never run a second install command.
-# Developers building from source install libkrun via their system package
-# manager, see igorjs/ward CONTRIBUTING.md for that workflow.
-#
-# Gating: manual trigger only. We don't run on push because libkrun bumps
-# rarely (every few months) but pushes to this repo are infrequent anyway;
-# manual control over when a 30-min matrix build runs is the right call.
+# Gating: manual trigger only.
 
 name: build
 
@@ -147,7 +138,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Version: \`${{ needs.resolve-version.outputs.libkrun_version }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Copy the following lines into \`checksums.txt\` (and into ward's release packaging pipeline that consumes this release):" >> "$GITHUB_STEP_SUMMARY"
+          echo "Copy the following lines into \`checksums.txt\`:" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           cat dist/*.sha256 | sort | tee -a "$GITHUB_STEP_SUMMARY"
@@ -159,23 +150,18 @@ jobs:
           tag_name: libkrun-v${{ needs.resolve-version.outputs.libkrun_version }}
           name: libkrun ${{ needs.resolve-version.outputs.libkrun_version }}
           body: |
-            Pre-built libkrun + libkrunfw binaries for ward.
+            Pre-built libkrun + libkrunfw binaries.
 
             Layout (inside each tarball):
             ```
             lib/libkrun.{dylib,so}      relocatable, @rpath / $ORIGIN install names
             lib/libkrunfw.{dylib,so}    same
-            lib/pkgconfig/libkrun.pc    synthesised, prefix placeholder rewritten by consumer
+            lib/pkgconfig/libkrun.pc    synthesised, prefix placeholder
             include/libkrun.h
             ```
 
-            Consumed by the ward release packaging workflow, which bundles
-            these dylibs alongside the `wardd` / `ward` binaries via rpath.
-
-            **Supply-chain note**: after this release publishes, copy the
-            SHA-256 sums (from the workflow Job Summary) into
-            `checksums.txt` here AND into ward's release packaging
-            consumer before depending on this version.
+            **Checksums**: SHA-256 sums are available in the workflow Job Summary
+            and in `checksums.txt`.
           files: |
             dist/libkrun-*.tar.gz
             dist/libkrun-*.tar.gz.sha256
