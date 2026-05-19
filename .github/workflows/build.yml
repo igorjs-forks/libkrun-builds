@@ -168,3 +168,23 @@ jobs:
             dist/libkrun-*.tar.gz
             dist/libkrun-*.tar.gz.sha256
           fail_on_unmatched_files: true
+
+      - name: Sync checksums.txt on main
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.libkrun_version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Preserve the comment/blank header, then append the sorted sums
+          # from the freshly built .sha256 sidecars. Keeps checksums.txt in
+          # lockstep with the published release so the watcher's automatic
+          # bumps never leave it stale.
+          { grep -E '^#|^$' checksums.txt; cat dist/*.sha256 | sort; } > checksums.txt.new
+          mv checksums.txt.new checksums.txt
+          git add checksums.txt
+          if git diff --cached --quiet; then
+            echo "checksums.txt already current"
+          else
+            git commit -m "chore: update checksums for libkrun-v${VERSION}"
+            git push origin HEAD:main
+          fi
