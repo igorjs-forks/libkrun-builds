@@ -2,7 +2,7 @@
 #
 # Watch containers/libkrun + containers/libkrunfw for new stable releases and,
 # when either is ahead of the versions pinned here, bump version.txt /
-# libkrunfw-version.txt on main and dispatch the build workflow to publish
+# libkrunfw-version.txt on main and dispatch the release workflow to publish
 # fresh bottles.
 #
 # Fully automatic, no human gate. Consequences to be aware of:
@@ -22,7 +22,7 @@ on:
 
 permissions:
   contents: write # commit version bumps to main
-  actions: write # dispatch the build workflow
+  actions: write # dispatch the release workflow
 
 concurrency:
   group: watch-upstream
@@ -99,8 +99,8 @@ jobs:
           git commit -m "chore: bump pinned libkrun/libkrunfw to latest upstream"
           git push
 
-      - name: Dispatch build workflow
+      - name: Dispatch release workflow
         if: steps.bump.outputs.build_needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run build.yml --ref main
+        run: gh workflow run release.yml --ref main

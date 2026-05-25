@@ -5,7 +5,7 @@
 #
 # Gating: manual trigger only.
 
-name: build
+name: release
 
 on:
   workflow_dispatch:

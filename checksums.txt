@@ -2,7 +2,7 @@
 # SHA-256 sums of vendored libkrun tarballs, one per supported target triple.
 #
 # Populated by humans after a successful run of
-# .github/workflows/build.yml, the workflow uploads each tarball to a
+# .github/workflows/release.yml, the workflow uploads each tarball to a
 # GitHub Release and prints the SHA-256 of each artefact in its Job
 # Summary. Copy those values here and commit. Consumers read this file
 # (or pin their own copy) and refuse to use any downloaded tarball whose
