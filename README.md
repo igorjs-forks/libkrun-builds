@@ -258,7 +258,7 @@ For the full hardening to engage, these need flipping in the GitHub UI:
 - **Settings → Rules → Rulesets**. Recommended.
   - One ruleset for `main` with: `Restrict deletions`, `Block force pushes`,
     `Require a pull request before merging` (CODEOWNERS review optional). Add
-    the App identity (`igorjs-bot` or whatever you named it) to the bypass
+    the App identity (`igorjs`) to the bypass
     list so its PRs auto-merge.
   - One ruleset for `libkrun-v*` tags with: `Restrict deletions`, `Block
     force pushes`. Stops leaked tokens from retagging a release to point at
