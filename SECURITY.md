@@ -1,90 +1,67 @@
 # Security Policy
 
-## Reporting a vulnerability
+## Reporting a Vulnerability
 
-Please report security vulnerabilities in this repository (the build
-scripts, CI workflows, or the published binaries) privately via GitHub's
-[Security Advisories](https://github.com/igorjs/libkrun-builds/security/advisories/new)
-feature. Don't open a public issue.
+**Do not open a public GitHub issue for security vulnerabilities.**
 
-Expected response timeline:
+To report a vulnerability, use one of:
 
-| Stage | Target |
-|---|---|
-| Initial acknowledgement | Within 7 days |
-| Triage and analysis     | Within 14 days |
-| Fix or detailed resolution | Within 30 days for confirmed reports |
+- **GitHub Security Advisories**: [Report a vulnerability](https://github.com/igorjs/libkrun-builds/security/advisories/new)
+- **Email**: **oss@mail.igorjs.io**
 
-Critical issues (remote code execution in the build pipeline, supply-chain
-compromise of upstream verification, signing-key exposure, compromise of
-the `igorjs` GitHub App identity) are prioritised over the standard
-cadence and handled out-of-band.
+Include:
+
+- Description of the vulnerability
+- Steps to reproduce
+- Affected versions
+- Impact assessment (what can an attacker do?)
+- Suggested fix (if you have one)
+
+### What to expect
+
+- **Acknowledgement** within 48 hours
+- **Assessment** within 7 days (severity, affected scope, fix plan)
+- **Fix and disclosure** within 30 days for critical issues, 90 days for others
+
+If the report is accepted, you will be credited in the release notes (unless you prefer anonymity).
+
+If the report is declined (not a vulnerability, or out of scope), you will receive an explanation and may open a public issue.
+
+## Supported Versions
+
+| Version | Supported |
+|---------|-----------|
+| `libkrun-v1.18.1` (latest) | Yes |
+| earlier | No |
+
+Only the latest released version (`libkrun-v1.18.1`) receives security patches. Upgrade to the latest version before reporting.
 
 ## Scope
 
 ### In scope
 
-- Vulnerabilities in `build.sh` or the CI workflows that could produce
-  compromised release artefacts.
-- Issues with the SHA verification, build provenance attestation, or
-  cosign signing pipeline that could let an attacker publish bytes
-  consumers would verify as legitimate.
-- Tampering paths against `upstream-checksums.txt`, `checksums.txt`, or
-  workflow secrets.
-- Compromise of the `igorjs` GitHub App identity that affects this
-  repo's releases.
-- Bypass of the main-branch or tag-protection rulesets.
+Vulnerabilities in this repository's code, including but not limited to:
+
+- Code execution, injection, or memory safety issues
+- Cryptographic weaknesses
+- Authentication or authorisation bypasses
+- Denial of service via crafted input
+- Bypass of any documented security guarantees (sandbox, isolation, etc.)
+- Compromise of the build, release, or signing pipeline (where applicable)
 
 ### Out of scope
 
-- **Vulnerabilities in upstream libkrun or libkrunfw.** Report those to
-  [containers/libkrun](https://github.com/containers/libkrun/security/advisories)
-  or [containers/libkrunfw](https://github.com/containers/libkrunfw/security/advisories)
-  instead. This repo only re-packages upstream binaries; it cannot patch
-  them.
-- Issues that require an attacker to already have admin or write access
-  to this repository.
-- Theoretical issues without a practical exploit path.
-- Bug reports about libkrun's runtime behaviour or microVM isolation.
-  Those belong upstream.
-
-## Verifying a release
-
-Three independent verification paths are published with every release.
-See the README's [Using a release](./README.md#using-a-release) section
-for full commands. In summary:
-
-| Path | Tool | What it proves |
-|---|---|---|
-| SHA-256 | `sha256sum -c <tarball>.sha256` | The tarball wasn't modified in transit. |
-| Build provenance attestation | `gh attestation verify <tarball> --repo igorjs/libkrun-builds` | The tarball was built by this specific workflow on this specific commit. |
-| Cosign keyless signature | `cosign verify-blob --signature <tarball>.sig --certificate <tarball>.pem ...` | The tarball was signed by a workload with this repo's OIDC identity. |
-
-For maximum confidence, run all three. The attestation path is the
-strongest end-to-end guarantee because it binds the artefact to the
-exact source commit and workflow run.
-
-## Supported versions
-
-Only the latest `libkrun-v<n>` release receives security updates. Older
-releases aren't back-ported. If a vulnerability is found in an older
-binary, upgrade to the latest release.
-
-When a new upstream `libkrun` or `libkrunfw` version lands and the
-watcher publishes the corresponding `libkrun-v<new>` release, the
-previous release is left in place but considered superseded for
-security purposes.
+- Vulnerabilities in third-party dependencies (report to the upstream maintainer)
+- Issues that require an attacker to already have admin or write access to this repository
+- Theoretical issues without a practical exploit path
+- Social engineering attacks
+- Issues requiring physical access to the user's machine
+- Bugs in development-only tooling not shipped to end users
 
 ## Hardening posture
 
-For the full security architecture of the build pipeline (SHA-pinned
-actions, harden-runner, App-token bot identity, attestation +
-cosign self-verify, ruleset-as-code via the separate `repo-config` repo,
-etc.), see the [Hardening posture](./README.md#hardening-posture)
-section of the README.
-
-## Coordinated disclosure
-
-If your report affects both this repo and upstream libkrun / libkrunfw,
-please file with both projects simultaneously. We'll coordinate the
-release of any fix with upstream where the vulnerability is shared.
+This repository is part of the `igorjs` repo set and follows a common
+hardening posture: ruleset-managed branch and tag protection, signed
+commits, SHA-pinned third-party actions, and an App-based bot identity
+with narrow per-repo scope. For the cross-repo configuration as code,
+see the [`repo-config`](https://github.com/igorjs/repo-config) repo.
