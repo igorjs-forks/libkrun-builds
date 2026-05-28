@@ -40,7 +40,7 @@ Pick one of the three verification paths depending on your trust model.
 TRIPLE=aarch64-apple-darwin               # or x86_64-unknown-linux-gnu, etc.
 VERSION=1.18.1                            # match the release tag, no 'v' prefix
 TARBALL=libkrun-${VERSION}-${TRIPLE}.tar.gz
-BASE=https://github.com/igorjs/libkrun-builds/releases/download/libkrun-v${VERSION}
+BASE=https://github.com/igorjs-forks/libkrun-builds/releases/download/libkrun-v${VERSION}
 
 curl --fail --location --remote-name "${BASE}/${TARBALL}"
 curl --fail --location --remote-name "${BASE}/${TARBALL}.sha256"
@@ -63,7 +63,7 @@ Sigstore using GitHub's OIDC. Verification proves the tarball was built by
 match a checksum someone published.
 
 ```bash
-gh attestation verify "${TARBALL}" --repo igorjs/libkrun-builds
+gh attestation verify "${TARBALL}" --repo igorjs-forks/libkrun-builds
 ```
 
 Requires `gh` 2.49+ and is free for public repos.
@@ -79,7 +79,7 @@ curl --fail --location --remote-name "${BASE}/${TARBALL}.pem"
 cosign verify-blob \
   --signature "${TARBALL}.sig" \
   --certificate "${TARBALL}.pem" \
-  --certificate-identity-regexp 'https://github.com/igorjs/libkrun-builds/.+' \
+  --certificate-identity-regexp 'https://github.com/igorjs-forks/libkrun-builds/.+' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "${TARBALL}"
 ```

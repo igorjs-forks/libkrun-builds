@@ -12,13 +12,13 @@
 #   allow-list is complete.
 # - Build provenance attestations (SLSA L3 via Sigstore + GitHub OIDC)
 #   generated per artefact. Verify with:
-#     gh attestation verify <tarball> --repo igorjs/libkrun-builds
+#     gh attestation verify <tarball> --repo igorjs-forks/libkrun-builds
 # - Cosign keyless signing produces `.sig` + `.pem` sidecars per
 #   tarball. Verify with:
 #     cosign verify-blob --signature <tarball>.sig \
 #       --certificate <tarball>.pem \
 #       --certificate-identity-regexp \
-#         'https://github.com/igorjs/libkrun-builds/.+' \
+#         'https://github.com/igorjs-forks/libkrun-builds/.+' \
 #       --certificate-oidc-issuer https://token.actions.githubusercontent.com \
 #       <tarball>
 # - Upstream tarball SHAs verified inside build.sh against
@@ -344,7 +344,7 @@ jobs:
             **Build provenance attestation** (proves this binary was built by
             this workflow on this commit):
             ```
-            gh attestation verify <tarball> --repo igorjs/libkrun-builds
+            gh attestation verify <tarball> --repo ${{ github.repository }}
             ```
 
             **Cosign keyless signature**:
@@ -352,7 +352,7 @@ jobs:
             cosign verify-blob \
               --signature <tarball>.sig \
               --certificate <tarball>.pem \
-              --certificate-identity-regexp 'https://github.com/igorjs/libkrun-builds/.+' \
+              --certificate-identity-regexp 'https://github.com/${{ github.repository }}/.+' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               <tarball>
             ```
