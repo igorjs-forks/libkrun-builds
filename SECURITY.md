@@ -31,10 +31,10 @@ If the report is declined (not a vulnerability, or out of scope), you will recei
 
 | Version | Supported |
 |---------|-----------|
-| `libkrun-v1.18.1` (latest) | Yes |
+| `libkrun-v1.19.0` (latest) | Yes |
 | earlier | No |
 
-Only the latest released version (`libkrun-v1.18.1`) receives security patches. Upgrade to the latest version before reporting.
+Only the latest released version (`libkrun-v1.19.0`) receives security patches. Upgrade to the latest version before reporting.
 
 ## Scope
 
