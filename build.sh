@@ -240,10 +240,16 @@ tar -xzf "${WORK}/libkrun.tar.gz" -C "${WORK}/libkrun" --strip-components=1 \
   export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PREFIX}/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"
   export LIBRARY_PATH="${PREFIX}/lib:${PREFIX}/lib64:${LIBRARY_PATH:-}"
   export LD_LIBRARY_PATH="${PREFIX}/lib:${PREFIX}/lib64:${LD_LIBRARY_PATH:-}"
-  # Tell libkrun's Makefile to install under our PREFIX.
-  make -j"$(getconf _NPROCESSORS_ONLN || echo 4)" \
+  # NET=1 enables the `net` cargo feature, exposing krun_set_passt_fd
+  # and krun_set_gvproxy_path (rootless networking; required by ward's
+  # passt + gvproxy backends per igorjs/ward ADR-018).
+  # BLK=1 enables the `blk` feature, exposing krun_add_virtio_block /
+  # krun_add_disk for block-device-attached volumes (igorjs/ward#43).
+  # Both gates are inert at runtime when the corresponding API is not
+  # called; downstream consumers without these features keep working.
+  make NET=1 BLK=1 -j"$(getconf _NPROCESSORS_ONLN || echo 4)" \
     || { echo "error: libkrun make failed" >&2; exit 3; }
-  make PREFIX="${PREFIX}" install \
+  make NET=1 BLK=1 PREFIX="${PREFIX}" install \
     || { echo "error: libkrun make install failed" >&2; exit 3; }
 )
 
