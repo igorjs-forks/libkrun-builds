@@ -10,9 +10,21 @@
 # - StepSecurity harden-runner active on every job in audit mode. Flip
 #   to `egress-policy: block` after a few clean runs confirm the
 #   allow-list is complete.
-# - Build provenance attestations (SLSA L3 via Sigstore + GitHub OIDC)
-#   generated per artefact. Verify with:
-#     gh attestation verify <tarball> --repo igorjs-forks/libkrun-builds
+# - Two-layer provenance for SLSA v1.0 Build L3 conformance:
+#   (1) Per-artefact in-toto attestation via actions/attest-build-
+#       provenance, signed by Sigstore + GitHub OIDC, generated inside
+#       the build job. Verify with:
+#         gh attestation verify <tarball> --repo igorjs-forks/libkrun-builds
+#   (2) SLSA v1 provenance via slsa-framework/slsa-github-generator
+#       running as an isolated reusable workflow. This closes the
+#       L2 -> L3 builder-isolation gap that a single-job pipeline
+#       can't provide on its own: the attestation describes the
+#       generator's own runner, not ours, so a malicious build step
+#       can't forge the statement. Verify with:
+#         gh attestation verify <tarball> --owner igorjs-forks
+#         slsa-verifier verify-artifact <tarball> \
+#           --provenance-path libkrun-v<version>.intoto.jsonl \
+#           --source-uri github.com/igorjs-forks/libkrun-builds
 # - Cosign keyless signing produces a `.cosign-bundle.json` sidecar
 #   per tarball (bundle format, required by cosign v3+). Verify with:
 #     cosign verify-blob --bundle <tarball>.cosign-bundle.json \
@@ -283,9 +295,76 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # ── Collect per-target subjects for the SLSA L3 generator ─────────
+  # The slsa-github-generator reusable workflow consumes a single
+  # base64-encoded multi-line string of `<sha256>  <filename>` subjects.
+  # Matrix outputs in GitHub Actions are clobbered to the last value,
+  # so we round-trip through artefacts: each build job already uploads
+  # its `.sha256` sidecar; here we download all three, concatenate +
+  # sort for determinism, and base64-encode the result.
+  collect-subjects:
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      digest: ${{ steps.compute.outputs.digest }}
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Download all build artefacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - id: compute
+        name: Encode subjects for SLSA generator
+        run: |
+          set -euo pipefail
+          cd dist
+          shopt -s nullglob
+          sidecars=( *.sha256 )
+          if (( ${#sidecars[@]} != 3 )); then
+            echo "error: expected 3 .sha256 sidecars, found ${#sidecars[@]}" >&2
+            ls -la >&2
+            exit 1
+          fi
+          DIGEST=$(cat ./*.sha256 | sort | base64 -w0)
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "::group::Subjects attested by SLSA L3 generator"
+          cat ./*.sha256 | sort
+          echo "::endgroup::"
+
+  # ── SLSA Build L3 provenance via the framework's reusable workflow ─
+  # Runs in an isolated job context the caller workflow cannot inject
+  # into; this is the property that closes the L2 -> L3 gap. The build
+  # environment the attestation describes is the reusable workflow's
+  # own runner, not ours.
+  #
+  # SHA pin matches repo-config's slsa_generator_ref default (v2.1.0),
+  # so libkrun-builds, ward, and the JS pure-* family all move together
+  # when the generator is bumped.
+  slsa_provenance:
+    needs: [resolve-version, collect-subjects]
+    permissions:
+      id-token: write     # mint OIDC token for Sigstore signing
+      contents: write     # upload provenance as a workflow artefact
+      actions: read       # generator reads caller workflow metadata
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
+    with:
+      base64-subjects: ${{ needs.collect-subjects.outputs.digest }}
+      provenance-name: libkrun-v${{ needs.resolve-version.outputs.libkrun_version }}.intoto.jsonl
+      # No upload-assets: the GH release doesn't exist yet at this
+      # point in the pipeline (it's created by the `release` job
+      # below). The generator stashes the attestation as an artefact
+      # and the release job attaches it alongside the tarballs.
+
   # ── Publish all targets in one release ────────────────────────────
   release:
-    needs: [resolve-version, build]
+    needs: [resolve-version, build, slsa_provenance]
     runs-on: ubuntu-latest
     permissions:
       contents: write       # required to create/update the release
@@ -301,6 +380,12 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      - name: Download SLSA L3 provenance
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ needs.slsa_provenance.outputs.provenance-download-name }}
+          path: dist
 
       - name: Verify all three targets present
         run: |
@@ -364,6 +449,15 @@ jobs:
             gh attestation verify <tarball> --repo ${{ github.repository }}
             ```
 
+            **SLSA v1.0 Build L3 provenance** (issued by the isolated
+            slsa-framework/slsa-github-generator reusable workflow, so
+            the attestation can't be forged by anything in the build job):
+            ```
+            slsa-verifier verify-artifact <tarball> \
+              --provenance-path libkrun-v${{ needs.resolve-version.outputs.libkrun_version }}.intoto.jsonl \
+              --source-uri github.com/${{ github.repository }}
+            ```
+
             **Cosign keyless signature**:
             ```
             cosign verify-blob \
@@ -378,6 +472,7 @@ jobs:
             dist/libkrun-*.tar.gz.sha256
             dist/libkrun-*.tar.gz.cosign-bundle.json
             dist/libkrun-*.tar.gz.sbom.cdx.json
+            dist/libkrun-v*.intoto.jsonl
           fail_on_unmatched_files: true
 
   # ── Sync checksums.txt via PR (diffable audit, optional auto-merge) ─
