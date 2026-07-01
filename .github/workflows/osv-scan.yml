@@ -72,5 +72,4 @@ jobs:
         with:
           scan-args: |-
             --recursive
-            --skip-git
             ./libkrun-src
