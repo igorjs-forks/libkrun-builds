@@ -10,7 +10,7 @@
 #
 # Format: <sha256>  <kind>/<version>/<asset>
 
-e8775fab2b460972a67ca6cd936296bb79cdb078d852d712a283cb290dd0b284  libkrun/v1.19.4/source.tar.gz
-a1b035fa178b38c14abf86879aa9b622073e45e49304ebd33f86e9e780a85ba0  libkrunfw/v5.6.1/libkrunfw-prebuilt-aarch64.tgz
-16a0e354c7e6a4514251c29cca982e7ab096ff98d51eeb16288d3bcc39e2a2c1  libkrunfw/v5.6.1/libkrunfw-x86_64.tgz
-afe8c9ffc5b4a2290ad4dd6df27605ef97b074151174a1f83e738354cdd66d95  libkrunfw/v5.6.1/libkrunfw-aarch64.tgz
+f7ffb97b86eb2153c4e7e5f8388c00e971d935e90c52303a8ab43a5a487356e1  libkrun/v1.19.5/source.tar.gz
+adef6739cc3bda2a1b57f04c08ccbfdf206a6c831d76b32de1beddc0e7984e86  libkrunfw/v5.6.2/libkrunfw-prebuilt-aarch64.tgz
+016c32ddb2a28aa300382cab33352d63a41a901eb36ee8d1ca24b389791c8b91  libkrunfw/v5.6.2/libkrunfw-x86_64.tgz
+dea7905a167eee17d482200ea2fe15871aceb293b0674ac825ed7ae69759399f  libkrunfw/v5.6.2/libkrunfw-aarch64.tgz
